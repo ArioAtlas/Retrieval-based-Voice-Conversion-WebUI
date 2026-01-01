@@ -1,3 +1,3 @@
 #!/bin/sh
 
-python3.8 -m venv .venv
+python3.10 -m venv .venv
