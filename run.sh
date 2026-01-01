@@ -148,22 +148,52 @@ check_and_install_aria2
 # Always show GPU selection menu
 requirements_file=$(select_gpu_config)
 
-# Install requirements if environment was just created
-if [ "$env_exists" = false ]; then
-  if [ -f "${requirements_file}" ]; then
-    echo "Installing packages from ${requirements_file}..."
-    # Remove aria2 from requirements file temporarily since it's a system package
-    if grep -q "^aria2$" "${requirements_file}" 2>/dev/null; then
-      temp_requirements=$(mktemp)
-      grep -v "^aria2$" "${requirements_file}" > "${temp_requirements}"
+# Always install/update requirements to ensure dependencies are up to date
+if [ -f "${requirements_file}" ]; then
+  echo "Installing/updating packages from ${requirements_file}..."
+  
+  # Check pip version and downgrade if >=24.1 to avoid metadata issues with fairseq/omegaconf
+  pip_version=$(pip --version | grep -oE '[0-9]+\.[0-9]+' | head -1)
+  pip_major=$(echo "${pip_version}" | cut -d. -f1)
+  pip_minor=$(echo "${pip_version}" | cut -d. -f2)
+  if [ "${pip_major}" -gt 24 ] || ([ "${pip_major}" -eq 24 ] && [ "${pip_minor}" -ge 1 ]); then
+    if grep -q "fairseq" "${requirements_file}" 2>/dev/null; then
+      echo "Detected pip ${pip_version}. Downgrading to pip<24.1 to resolve fairseq dependency issues..."
+      pip install "pip<24.1" --quiet
+    fi
+  fi
+  
+  # Ensure gradio and gradio-client are installed together for compatibility
+  if grep -q "gradio==" "${requirements_file}" 2>/dev/null; then
+    gradio_version=$(grep "gradio==" "${requirements_file}" | head -1 | sed 's/.*==//')
+    if grep -q "gradio-client==" "${requirements_file}" 2>/dev/null; then
+      gradio_client_version=$(grep "gradio-client==" "${requirements_file}" | head -1 | sed 's/.*==//')
+      echo "Ensuring gradio==${gradio_version} and gradio-client==${gradio_client_version} compatibility..."
+      pip install "gradio==${gradio_version}" "gradio-client==${gradio_client_version}" --force-reinstall 2>/dev/null || true
+    fi
+  fi
+  
+  # Remove aria2 from requirements file temporarily since it's a system package
+  if grep -q "^aria2$" "${requirements_file}" 2>/dev/null; then
+    temp_requirements=$(mktemp)
+    grep -v "^aria2$" "${requirements_file}" > "${temp_requirements}"
+    # Try normal install first, fallback to legacy resolver if it fails
+    if ! pip install -r "${temp_requirements}"; then
+      echo "Encountered dependency conflicts, retrying with legacy resolver..."
+      pip install --use-deprecated=legacy-resolver -r "${temp_requirements}" 2>/dev/null || \
       pip install -r "${temp_requirements}"
-      rm "${temp_requirements}"
-    else
+    fi
+    rm "${temp_requirements}"
+  else
+    # Try normal install first, fallback to legacy resolver if it fails
+    if ! pip install -r "${requirements_file}"; then
+      echo "Encountered dependency conflicts, retrying with legacy resolver..."
+      pip install --use-deprecated=legacy-resolver -r "${requirements_file}" 2>/dev/null || \
       pip install -r "${requirements_file}"
     fi
-  else
-    echo "Warning: ${requirements_file} not found. Skipping package installation."
   fi
+else
+  echo "Warning: ${requirements_file} not found. Skipping package installation."
 fi
 
 # Download models
